@@ -1,12 +1,9 @@
 # TODO
 
 ## Phase 1: Core + Docker Compose
-- Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
-- Retries: exponential backoff via TTL queues + DLX
-- API requeue endpoint
-- Graceful shutdown: SIGTERM, stop consuming, finish in-flight, exit
 - Dockerfiles (api, worker) + docker-compose with healthchecks
 - Refactor: move Handler type + registry + sleep/cpu/flaky into internal/handlers
+- Graceful shutdown: verify/polish during k8s rolling-deploy work (basic SIGTERM handling done)
 
 ## Phase 2: Kubernetes
 - k3s Deployments for api + worker
@@ -21,6 +18,11 @@
 ## Demo
 - Burst-submit CPU jobs, watch workers scale 1 => 10 in Grafana
 - Kill worker mid-job, show job still completes
+
+## Stretch (robustness, post-demo)
+- Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
+- Retries: exponential backoff via TTL queues + DLX (retries currently immediate)
+- API requeue endpoint for terminally failed jobs
 
 ## Stretch
 - Apply a real use-case for jobs
