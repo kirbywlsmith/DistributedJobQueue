@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -100,19 +101,21 @@ func (s *server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetJob(w http.ResponseWriter, r *http.Request) {
-	rawId := r.PathValue("id");
-	id, err := uuid.Parse(rawId)
+	rawID := r.PathValue("id")
+	id, err := uuid.Parse(rawID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid uuid")
 		return
 	}
 	job, err := s.store.GetJob(r.Context(), id)
-	if err == storage.ErrNotFound {
+	if errors.Is(err, storage.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "id not found")
-		return;
-	} else if err != nil {
+		return
+	}
+	if err != nil {
+		s.log.Error("get job", "err", err)
 		writeError(w, http.StatusInternalServerError, "error occurred while retrieving job")
-		return;
+		return
 	}
 
 	writeJSON(w, http.StatusOK, job)
