@@ -2,7 +2,6 @@
 
 ## Phase 1: Core + Docker Compose
 - Worker: consume ID, load job, run handler, upsert result, ack after write
-- Job handlers: sleep, CPU-heavy, flaky
 - Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
 - Retries: exponential backoff via TTL queues + DLX
 - Dead-letter after max retries + API requeue endpoint
