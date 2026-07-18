@@ -88,6 +88,7 @@ func main() {
 func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	id, err := uuid.Parse(string(d.Body))
 	if err != nil {
+		w.log.Error("error while parsing uuid", "err", err)
 		_ = d.Nack(false, false)
 		return
 	}
@@ -101,7 +102,7 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 	if err != nil {
-		logger.Error("error while getting the job")
+		logger.Error("error while getting the job", "err", err)
 		_ = d.Nack(false, true)
 		return
 	}
