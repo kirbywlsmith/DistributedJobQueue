@@ -19,7 +19,7 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-// Connects to Postgres and verifies the connection with a ping
+// New connects to Postgres and verifies the connection with a ping
 //
 // dsn looks like: postgres://user:pass@host:port/dbname
 func New(ctx context.Context, dsn string) (*Store, error) {
@@ -41,7 +41,7 @@ func (s *Store) Close() {
 const jobColumns = `id, job_type, payload, status, attempts, max_attempts,
 	result, last_error, created_at, updated_at, started_at, finished_at`
 
-// Reads one row into a Job. pgx.Row covers both QueryRow results and collected rows
+// scanJob reads one row into a Job. pgx.Row covers both QueryRow results and collected rows
 func scanJob(row pgx.Row) (*jobs.Job, error) {
 	var j jobs.Job
 	err := row.Scan(
@@ -57,7 +57,7 @@ func scanJob(row pgx.Row) (*jobs.Job, error) {
 	return &j, nil
 }
 
-// Inserts a new queued job and returns the full row (the DB generates the ID and timestamps)
+// CreateJob inserts a new queued job and returns the full row (the DB generates the ID and timestamps)
 func (s *Store) CreateJob(ctx context.Context, jobType string, payload json.RawMessage, maxAttempts int) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO jobs (job_type, payload, max_attempts)
@@ -67,13 +67,13 @@ func (s *Store) CreateJob(ctx context.Context, jobType string, payload json.RawM
 	return scanJob(row)
 }
 
-// Fetches a job by ID, returning ErrNotFound if it doesn't exist
+// GetJob fetches a job by ID, returning ErrNotFound if it doesn't exist
 func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id = $1`, id)
 	return scanJob(row)
 }
 
-// Atomically transitions a job from queued to running
+// StartJob atomically transitions a job from queued to running
 func (s *Store) StartJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		UPDATE jobs
@@ -88,7 +88,7 @@ func (s *Store) StartJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error) {
 	return scanJob(row)
 }
 
-// Atomically records a successful result
+// CompleteJob atomically records a successful result
 func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, result json.RawMessage) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs
@@ -108,8 +108,8 @@ func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, result json.RawMe
 	return nil
 }
 
-// Atomically records a failed result
 func (s *Store) FailJob(ctx context.Context, id uuid.UUID, result json.RawMessage) error {
+// FailJob atomically records a failed attempt
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs
 		SET
