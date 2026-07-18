@@ -132,7 +132,7 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 	res, err := handler(ctx, job.Payload)
 	if err != nil {
-		logger.Error("error while running the job")
+		logger.Error("error while running the job", "err", err)
 
 		job, ferr := w.store.FailJob(ctx, id, err.Error())
 		if ferr != nil {
@@ -141,7 +141,12 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 			return
 		}
 		if job.Status == jobs.StatusQueued {
-			w.pub.PublishJobID(ctx, id.String())
+			err = w.pub.PublishJobID(ctx, id.String())
+			if err != nil {
+				logger.Error("publish error", "err", ferr)
+				_ = d.Nack(false, true)
+				return
+			}
 		}
 		
 		_ = d.Ack(false)
