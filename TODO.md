@@ -8,6 +8,7 @@
 - Dead-letter after max retries + API requeue endpoint
 - Graceful shutdown: SIGTERM, stop consuming, finish in-flight, exit
 - Dockerfiles (api, worker) + docker-compose with healthchecks
+- Refactor: move Handler type + registry + sleep/cpu/flaky into internal/handlers
 
 ## Phase 2: Kubernetes
 - k3s Deployments for api + worker
