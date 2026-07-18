@@ -88,7 +88,7 @@ func main() {
 func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	id, err := uuid.Parse(string(d.Body))
 	if err != nil {
-		d.Nack(false, false)
+		_ = d.Nack(false, false)
 		return
 	}
 
@@ -97,19 +97,19 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	job, err := w.store.GetJob(ctx, id)
 	if errors.Is(err, storage.ErrNotFound) {
 		logger.Warn("job not found")
-		d.Nack(false, false)
+		_ = d.Nack(false, false)
 		return
 	}
 	if err != nil {
 		logger.Error("error while getting the job")
-		d.Nack(false, true)
+		_ = d.Nack(false, true)
 		return
 	}
 
 	handler, exists := handlers[job.Type]
-    if !exists {
+	if !exists {
 		logger.Warn("specified handler was not found")
-		d.Nack(false, true)
+		_ = d.Nack(false, true)
 		return
 	}
 
@@ -118,12 +118,12 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	job, err = w.store.StartJob(ctx, id)
 	if errors.Is(err, storage.ErrNotFound) {
 		logger.Warn("unable to start the job")
-		d.Ack(false)
+		_ = d.Ack(false)
 		return
 	}
 	if err != nil {
-		logger.Error("error while starting the job")
-		d.Nack(false, true)
+		logger.Error("error while starting the job", "err", err)
+		_ = d.Nack(false, true)
 		return
 	}
 
@@ -132,16 +132,29 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	res, err := handler(ctx, job.Payload)
 	if err != nil {
 		logger.Error("error while running the job")
-		job, _ = w.store.FailJob(ctx, id, err.Error())
-		if job.Type == string(jobs.StatusQueued) {
+
+		job, ferr := w.store.FailJob(ctx, id, err.Error())
+		if ferr != nil {
+			logger.Error("record failure", "err", ferr)
+			_ = d.Nack(false, true)
+			return
+		}
+		if job.Status == jobs.StatusQueued {
 			w.pub.PublishJobID(ctx, id.String())
 		}
-		d.Ack(false)
+		
+		_ = d.Ack(false)
 		return
 	} 
-	err = w.store.CompleteJob(ctx, id, res)
 
-	d.Ack(false)
+	err = w.store.CompleteJob(ctx, id, res)
+	if err != nil {
+		logger.Error("record completion", "err", err)
+		_ = d.Nack(false, true)
+		return
+	}
+
+	_ = d.Ack(false)
 }
 
 // --- test handlers ---
