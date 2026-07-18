@@ -1,7 +1,7 @@
 # TODO
 
 ## Phase 1: Core + Docker Compose
-- Postgres schema: jobs table (status: queued/running/completed/failed/cancelled/paused/scheduled)
+- Postgres schema: jobs table (status: queued/running/completed/failed)
 - API: POST /jobs (write row, publish ID to RabbitMQ), GET /jobs/{id}
 - Worker: consume ID, load job, run handler, upsert result, ack after write
 - Job handlers: sleep, CPU-heavy, flaky
@@ -26,4 +26,5 @@
 
 ## Stretch
 - Apply a real use-case for jobs
+- Runs table: one row per attempt (worker, timings, error) + retention policy
 - Priority queues
