@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/kirbywlsmith/DistributedJobQueue/internal/jobs"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/queue"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/storage"
 )
@@ -82,9 +84,64 @@ func main() {
 	}
 }
 
+// handleDelivery processes one message end to end
 func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
-	w.log.Warn("handleDelivery not implemented, discarding", "body", string(d.Body))
-	_ = d.Nack(false, false)
+	id, err := uuid.Parse(string(d.Body))
+	if err != nil {
+		d.Nack(false, false)
+		return
+	}
+
+	logger := w.log.With("job_id", id)
+
+	job, err := w.store.GetJob(ctx, id)
+	if errors.Is(err, storage.ErrNotFound) {
+		logger.Warn("job not found")
+		d.Nack(false, false)
+		return
+	}
+	if err != nil {
+		logger.Error("error while getting the job")
+		d.Nack(false, true)
+		return
+	}
+
+	handler, exists := handlers[job.Type]
+    if !exists {
+		logger.Warn("specified handler was not found")
+		d.Nack(false, true)
+		return
+	}
+
+	logger.Info("starting job")
+
+	job, err = w.store.StartJob(ctx, id)
+	if errors.Is(err, storage.ErrNotFound) {
+		logger.Warn("unable to start the job")
+		d.Ack(false)
+		return
+	}
+	if err != nil {
+		logger.Error("error while starting the job")
+		d.Nack(false, true)
+		return
+	}
+
+	logger.Info("running job")
+
+	res, err := handler(ctx, job.Payload)
+	if err != nil {
+		logger.Error("error while running the job")
+		job, _ = w.store.FailJob(ctx, id, err.Error())
+		if job.Type == string(jobs.StatusQueued) {
+			w.pub.PublishJobID(ctx, id.String())
+		}
+		d.Ack(false)
+		return
+	} 
+	err = w.store.CompleteJob(ctx, id, res)
+
+	d.Ack(false)
 }
 
 // --- test handlers ---
