@@ -41,6 +41,18 @@ func (p *Publisher) Close() {
 	p.conn.Close()
 }
 
+// Consume starts delivering messages from the jobs queue on the returned channel.
+func (p *Publisher) Consume() (<-chan amqp.Delivery, error) {
+	if err := p.ch.Qos(1, 0, false); err != nil {
+		return nil, fmt.Errorf("set qos: %w", err)
+	}
+	deliveries, err := p.ch.Consume(JobsQueue, "", false, false, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("consume: %w", err)
+	}
+	return deliveries, nil
+}
+
 // PublishJobID sends a job ID to the jobs queue.
 func (p *Publisher) PublishJobID(ctx context.Context, jobID string) error {
 	err := p.ch.PublishWithContext(ctx,
