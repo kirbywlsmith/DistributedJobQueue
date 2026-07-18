@@ -143,15 +143,15 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 		if job.Status == jobs.StatusQueued {
 			err = w.pub.PublishJobID(ctx, id.String())
 			if err != nil {
-				logger.Error("publish error", "err", ferr)
+				logger.Error("publish error", "err", err)
 				_ = d.Nack(false, true)
 				return
 			}
 		}
-		
+
 		_ = d.Ack(false)
 		return
-	} 
+	}
 
 	err = w.store.CompleteJob(ctx, id, res)
 	if err != nil {
