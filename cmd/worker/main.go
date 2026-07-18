@@ -82,6 +82,10 @@ func main() {
 	}
 }
 
+func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
+	w.log.Warn("handleDelivery not implemented, discarding", "body", string(d.Body))
+	_ = d.Nack(false, false)
+}
 // --- test handlers ---
 
 func handleSleep(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
