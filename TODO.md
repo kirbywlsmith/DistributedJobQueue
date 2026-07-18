@@ -3,7 +3,7 @@
 ## Phase 1: Core + Docker Compose
 - Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
 - Retries: exponential backoff via TTL queues + DLX
-- Dead-letter after max retries + API requeue endpoint
+- API requeue endpoint
 - Graceful shutdown: SIGTERM, stop consuming, finish in-flight, exit
 - Dockerfiles (api, worker) + docker-compose with healthchecks
 - Refactor: move Handler type + registry + sleep/cpu/flaky into internal/handlers
