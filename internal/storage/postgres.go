@@ -108,22 +108,19 @@ func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, result json.RawMe
 	return nil
 }
 
-func (s *Store) FailJob(ctx context.Context, id uuid.UUID, result json.RawMessage) error {
 // FailJob atomically records a failed attempt
+func (s *Store) FailJob(ctx context.Context, id uuid.UUID, errMsg string) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs
 		SET
-			status = CASE
-				WHEN attempts < max_attempts THEN 'queued',
-				ELSE 'failed'
-			END,
+			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
+		    finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
 			last_error = $2,
-		    finished_at = now(),
 			updated_at = now()
 		WHERE id = $1 AND status = 'running'`,
-		id, result)
+		id, errMsg)
 	if err != nil {
-		return fmt.Errorf("complete job: %w", err)
+		return fmt.Errorf("fail job: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
