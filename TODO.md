@@ -4,6 +4,7 @@
 - API: POST /jobs (write row, publish ID to RabbitMQ), GET /jobs/{id}
 - Worker: consume ID, load job, run handler, upsert result, ack after write
 - Job handlers: sleep, CPU-heavy, flaky
+- Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
 - Retries: exponential backoff via TTL queues + DLX
 - Dead-letter after max retries + API requeue endpoint
 - Graceful shutdown: SIGTERM, stop consuming, finish in-flight, exit
@@ -30,3 +31,4 @@
 - 'paused' status: pause/resume jobs
 - Runs table: one row per attempt (worker, timings, error) + retention policy
 - Priority queues
+- Per-type queues: workers bind only to job types they handle
