@@ -34,6 +34,34 @@ services:
       timeout: 3s
       retries: 10
 
+  api:
+    build:
+      context: .
+      dockerfile: cmd/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://jobqueue:jobqueue@postgres:5432/jobqueue?sslmode=disable
+      AMQP_URL: amqp://jobqueue:jobqueue@rabbitmq:5672/
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: cmd/worker/Dockerfile
+    environment:
+      DATABASE_URL: postgres://jobqueue:jobqueue@postgres:5432/jobqueue?sslmode=disable
+      AMQP_URL: amqp://jobqueue:jobqueue@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   pgdata:
   rabbitmqdata:

@@ -1,7 +1,6 @@
 # TODO
 
 ## Phase 1: Core + Docker Compose
-- Dockerfiles (api, worker) + docker-compose with healthchecks
 - Refactor: move Handler type + registry + sleep/cpu/flaky into internal/handlers
 - Graceful shutdown: verify/polish during k8s rolling-deploy work (basic SIGTERM handling done)
 
