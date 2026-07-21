@@ -1,9 +1,8 @@
 # TODO
 
 ## Kubernetes
-- k3s Deployments for api + worker
-- Liveness/readiness probes, resource limits
-- ConfigMaps + Secrets
+- Liveness/readiness probes on api + worker (only pg/rabbitmq have them so far)
+- Secrets: move pg/rabbitmq passwords out of plaintext env (ConfigMap for migration done)
 
 ## Scaling + Observability
 - KEDA autoscaling on queue depth
