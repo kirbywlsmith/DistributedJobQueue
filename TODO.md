@@ -1,14 +1,11 @@
 # TODO
 
-## Phase 1: Core + Docker Compose
-- Graceful shutdown: verify/polish during k8s rolling-deploy work (basic SIGTERM handling done)
-
-## Phase 2: Kubernetes
+## Kubernetes
 - k3s Deployments for api + worker
 - Liveness/readiness probes, resource limits
 - ConfigMaps + Secrets
 
-## Phase 3: Scaling + Observability
+## Scaling + Observability
 - KEDA autoscaling on queue depth
 - Prometheus metrics + Grafana dashboard
 - Zero-loss rolling deploys
