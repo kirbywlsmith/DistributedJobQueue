@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: distributedjobqueue-api
+        image: distributedjobqueue-api
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        env:
+        - name: DATABASE_URL
+          value: postgres://jobqueue:jobqueue@postgres:5432/jobqueue?sslmode=disable
+        - name: AMQP_URL
+          value: amqp://jobqueue:jobqueue@rabbitmq:5672/
+

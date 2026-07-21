@@ -1,0 +1,80 @@
+# The migration SQL, packaged as a ConfigMap so Postgres can mount it.
+# Postgres runs any .sql in /docker-entrypoint-initdb.d on first startup.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  001_create_jobs.sql: |
+    CREATE TYPE job_status AS ENUM ('queued', 'running', 'completed', 'failed');
+
+    CREATE TABLE jobs (
+        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        job_type     TEXT        NOT NULL,
+        payload      JSONB       NOT NULL DEFAULT '{}',
+        status       job_status  NOT NULL DEFAULT 'queued',
+        attempts     INT         NOT NULL DEFAULT 0,
+        max_attempts INT         NOT NULL DEFAULT 5,
+        result       JSONB,
+        last_error   TEXT,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        started_at   TIMESTAMPTZ,
+        finished_at  TIMESTAMPTZ
+    );
+
+    CREATE INDEX idx_jobs_status ON jobs (status, created_at);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  replicas: 1                 # single instance; data is ephemeral (no PVC) — fine for dev/demo
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:17-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          value: jobqueue
+        - name: POSTGRES_PASSWORD
+          value: jobqueue          # plaintext for now; moves to a Secret later
+        - name: POSTGRES_DB
+          value: jobqueue
+        volumeMounts:
+        - name: init
+          mountPath: /docker-entrypoint-initdb.d
+        readinessProbe:            # gate: don't route traffic until Postgres answers
+          exec:
+            command: ["pg_isready", "-U", "jobqueue", "-d", "jobqueue"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: init
+        configMap:
+          name: postgres-init
+---
+# Service: a stable in-cluster DNS name "postgres" that load-balances to the Pod.
+# This is why DATABASE_URL can say @postgres:5432 — the Service name IS the host.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres              # routes to any Pod with label app=postgres
+  ports:
+  - port: 5432                 # port the Service listens on
+    targetPort: 5432           # port on the Pod it forwards to
