@@ -11,6 +11,7 @@
 
 ## Stretch (robustness, post-demo)
 - Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
+- AMQP reconnect: Publisher opens conn once at startup + never recovers if conn drops
 - Retries: exponential backoff via TTL queues + DLX (retries currently immediate)
 - API requeue endpoint for terminally failed jobs
 
