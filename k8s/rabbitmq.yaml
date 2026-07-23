@@ -22,9 +22,15 @@ spec:
         - containerPort: 15672    # management UI
         env:
         - name: RABBITMQ_DEFAULT_USER
-          value: jobqueue
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: RABBITMQ_DEFAULT_USER
         - name: RABBITMQ_DEFAULT_PASS
-          value: jobqueue          # plaintext for now; moves to a Secret later
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: RABBITMQ_DEFAULT_PASS
         readinessProbe:
           exec:
             command: ["rabbitmq-diagnostics", "-q", "ping"]

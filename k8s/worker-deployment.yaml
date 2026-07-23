@@ -29,9 +29,15 @@ spec:
             cpu: "500m"
         env:
         - name: DATABASE_URL
-          value: postgres://jobqueue:jobqueue@postgres:5432/jobqueue?sslmode=disable
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: DATABASE_URL
         - name: AMQP_URL
-          value: amqp://jobqueue:jobqueue@rabbitmq:5672/
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: AMQP_URL
         livenessProbe:
           httpGet:
             path: /healthz

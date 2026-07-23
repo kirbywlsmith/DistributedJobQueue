@@ -48,11 +48,20 @@ spec:
         - containerPort: 5432
         env:
         - name: POSTGRES_USER
-          value: jobqueue
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: POSTGRES_USER
         - name: POSTGRES_PASSWORD
-          value: jobqueue          # plaintext for now; moves to a Secret later
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: POSTGRES_PASSWORD
         - name: POSTGRES_DB
-          value: jobqueue
+          valueFrom:
+            secretKeyRef:
+              name: jobqueue-credentials
+              key: POSTGRES_DB
         volumeMounts:
         - name: init
           mountPath: /docker-entrypoint-initdb.d

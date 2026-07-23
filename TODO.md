@@ -1,8 +1,5 @@
 # TODO
 
-## Kubernetes
-- Secrets: move pg/rabbitmq passwords out of plaintext env (ConfigMap for migration done)
-
 ## Scaling + Observability
 - KEDA autoscaling on queue depth
 - Prometheus metrics + Grafana dashboard
