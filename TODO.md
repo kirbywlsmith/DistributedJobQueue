@@ -1,7 +1,6 @@
 # TODO
 
 ## Kubernetes
-- Liveness/readiness probes on api + worker (only pg/rabbitmq have them so far)
 - Secrets: move pg/rabbitmq passwords out of plaintext env (ConfigMap for migration done)
 
 ## Scaling + Observability

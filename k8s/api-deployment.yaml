@@ -32,4 +32,15 @@ spec:
           value: postgres://jobqueue:jobqueue@postgres:5432/jobqueue?sslmode=disable
         - name: AMQP_URL
           value: amqp://jobqueue:jobqueue@rabbitmq:5672/
-
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -25,6 +26,16 @@ type worker struct {
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		if err := http.ListenAndServe(envOr("HEALTH_ADDR", ":8080"), mux); err != nil {
+			log.Error("health server", "err", err)
+		}
+	}()
 
 	dsn := envOr("DATABASE_URL", "postgres://jobqueue:jobqueue@localhost:5433/jobqueue?sslmode=disable")
 	amqpURL := envOr("AMQP_URL", "amqp://jobqueue:jobqueue@localhost:5672/")

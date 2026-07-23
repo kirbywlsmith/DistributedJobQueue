@@ -47,6 +47,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /jobs", s.handleCreateJob)
 	mux.HandleFunc("GET /jobs/{id}", s.handleGetJob)
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
 	log.Info("api listening", "addr", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -119,6 +121,19 @@ func (s *server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.Ping(r.Context()); err != nil {
+		s.log.Warn("readiness check failed", "err", err)
+		writeError(w, http.StatusServiceUnavailable, "not ready")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

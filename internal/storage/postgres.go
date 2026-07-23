@@ -38,6 +38,10 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 const jobColumns = `id, job_type, payload, status, attempts, max_attempts,
 	result, last_error, created_at, updated_at, started_at, finished_at`
 
