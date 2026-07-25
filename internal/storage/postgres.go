@@ -112,6 +112,25 @@ func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, result json.RawMe
 	return nil
 }
 
+func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET
+			status = 'queued',
+			attempts = GREATEST(attempts - 1, 0),
+			started_at = NULL,
+			updated_at = now()
+		WHERE id = $1 AND status = 'running'`,
+		id)
+	if err != nil {
+		return fmt.Errorf("release job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // FailJob atomically records a failed attempt
 func (s *Store) FailJob(ctx context.Context, id uuid.UUID, errMsg string) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `

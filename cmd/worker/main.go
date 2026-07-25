@@ -88,6 +88,11 @@ func main() {
 
 // handleDelivery processes one message end to end
 func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
+	if ctx.Err() != nil {
+		_ = d.Nack(false, true)
+		return
+	}
+
 	id, err := uuid.Parse(string(d.Body))
 	if err != nil {
 		w.log.Error("error while parsing uuid", "err", err)
@@ -134,20 +139,35 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 	start := time.Now()
 	res, err := handler(ctx, job.Payload)
-	metrics.JobDuration.WithLabelValues(job.Type).Observe(time.Since(start).Seconds())
+	elapsed := time.Since(start)
+
+	bookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if ctx.Err() != nil {
+		logger.Info("interrupted by shutdown, releasing job")
+		if rerr := w.store.ReleaseJob(bookCtx, id); rerr != nil {
+			logger.Error("release job", "err", rerr)
+		}
+		_ = d.Nack(false, true)
+		return
+	}
+
+	metrics.JobDuration.WithLabelValues(job.Type).Observe(elapsed.Seconds())
+
 	if err != nil {
 		metrics.JobsProcessed.WithLabelValues(job.Type, "failed").Inc()
 
 		logger.Error("error while running the job", "err", err)
 
-		job, ferr := w.store.FailJob(ctx, id, err.Error())
+		job, ferr := w.store.FailJob(bookCtx, id, err.Error())
 		if ferr != nil {
 			logger.Error("record failure", "err", ferr)
 			_ = d.Nack(false, true)
 			return
 		}
 		if job.Status == jobs.StatusQueued {
-			err = w.pub.PublishJobID(ctx, id.String())
+			err = w.pub.PublishJobID(bookCtx, id.String())
 			if err != nil {
 				logger.Error("publish error", "err", err)
 				_ = d.Nack(false, true)
@@ -159,7 +179,7 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	err = w.store.CompleteJob(ctx, id, res)
+	err = w.store.CompleteJob(bookCtx, id, res)
 	if err != nil {
 		logger.Error("record completion", "err", err)
 		_ = d.Nack(false, true)

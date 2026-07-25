@@ -14,6 +14,7 @@ spec:
       labels:
         app: worker
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
       - name: distributedjobqueue-worker
         image: distributedjobqueue-worker
