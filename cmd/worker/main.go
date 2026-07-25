@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/handlers"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/jobs"
+	"github.com/kirbywlsmith/DistributedJobQueue/internal/metrics"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/queue"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/storage"
 )
@@ -32,6 +35,7 @@ func main() {
 		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
+		mux.Handle("GET /metrics", promhttp.Handler())
 		if err := http.ListenAndServe(envOr("HEALTH_ADDR", ":8080"), mux); err != nil {
 			log.Error("health server", "err", err)
 		}
@@ -128,8 +132,12 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 	logger.Info("running job")
 
+	start := time.Now()
 	res, err := handler(ctx, job.Payload)
+	metrics.JobDuration.WithLabelValues(job.Type).Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.JobsProcessed.WithLabelValues(job.Type, "failed").Inc()
+
 		logger.Error("error while running the job", "err", err)
 
 		job, ferr := w.store.FailJob(ctx, id, err.Error())
@@ -157,6 +165,8 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 		_ = d.Nack(false, true)
 		return
 	}
+
+	metrics.JobsProcessed.WithLabelValues(job.Type, "completed").Inc()
 
 	_ = d.Ack(false)
 }

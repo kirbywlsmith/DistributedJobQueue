@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/queue"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/storage"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type server struct {
@@ -49,6 +50,7 @@ func main() {
 	mux.HandleFunc("GET /jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	mux.Handle("GET /metrics", promhttp.Handler())
 
 	log.Info("api listening", "addr", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {

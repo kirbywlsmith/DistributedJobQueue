@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: jobqueue
+spec:
+  selector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - api
+          - worker
+  podMetricsEndpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: rabbitmq
+spec:
+  selector:
+    matchLabels:
+      app: rabbitmq
+  podMetricsEndpoints:
+  - port: prometheus
+    path: /metrics/per-object
+  
