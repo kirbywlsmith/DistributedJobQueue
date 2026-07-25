@@ -1,7 +1,6 @@
 # TODO
 
 ## Scaling + Observability
-- Prometheus metrics + Grafana dashboard
 - Zero-loss rolling deploys / graceful shutdown:
   on SIGTERM the handler returns ctx.Err(), then FailJob is called with that SAME
   cancelled ctx -> DB write fails -> Nack(requeue), but the row stays 'running'.
