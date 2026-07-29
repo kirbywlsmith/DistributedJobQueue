@@ -19,6 +19,29 @@ const (
 	publishRetries = 5
 )
 
+var retryDelays = []time.Duration{
+	5 * time.Second,
+	30 * time.Second,
+	2 * time.Minute,
+	10 * time.Minute,
+	30 * time.Minute,
+}
+
+func RetryDelay(attempt int) time.Duration {
+	i := attempt - 1
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(retryDelays) {
+		i = len(retryDelays) - 1
+	}
+	return retryDelays[i]
+}
+
+func retryQueueName(d time.Duration) string {
+	return fmt.Sprintf("%s.retry.%ds", JobsQueue, int(d.Seconds()))
+}
+
 // Publisher owns an AMQP connection + channel for sending job IDs.
 type Publisher struct {
 	url string
@@ -66,10 +89,29 @@ func (p *Publisher) connect() error {
 		conn.Close()
 		return fmt.Errorf("enable publisher confirms: %w", err)
 	}
+	if err := declareRetryQueues(ch); err != nil {
+		ch.Close()
+		conn.Close()
+		return err
+	}
 
 	p.mu.Lock()
 	p.conn, p.ch = conn, ch
 	p.mu.Unlock()
+	return nil
+}
+
+func declareRetryQueues(ch *amqp.Channel) error {
+	for _, d := range retryDelays {
+		args := amqp.Table{
+			"x-message-ttl":             int64(d / time.Millisecond),
+			"x-dead-letter-exchange":    "",
+			"x-dead-letter-routing-key": JobsQueue,
+		}
+		if _, err := ch.QueueDeclare(retryQueueName(d), true, false, false, false, args); err != nil {
+			return fmt.Errorf("declare retry queue %s: %w", retryQueueName(d), err)
+		}
+	}
 	return nil
 }
 
@@ -210,13 +252,22 @@ func (p *Publisher) resubscribe(ctx context.Context) (<-chan amqp.Delivery, erro
 }
 
 func (p *Publisher) PublishJobID(ctx context.Context, jobID string) error {
+	return p.publish(ctx, JobsQueue, jobID)
+}
+
+func (p *Publisher) PublishRetry(ctx context.Context, jobID string, attempt int) (time.Duration, error) {
+	d := RetryDelay(attempt)
+	return d, p.publish(ctx, retryQueueName(d), jobID)
+}
+
+func (p *Publisher) publish(ctx context.Context, routingKey, jobID string) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= publishRetries; attempt++ {
 		ch := p.channel()
 		if ch == nil {
 			lastErr = errors.New("no amqp channel")
-		} else if err := publishConfirmed(ctx, ch, jobID); err != nil {
+		} else if err := publishConfirmed(ctx, ch, routingKey, jobID); err != nil {
 			lastErr = err
 		} else {
 			if attempt > 1 {
@@ -227,18 +278,18 @@ func (p *Publisher) PublishJobID(ctx context.Context, jobID string) error {
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("publish job id: %w", ctx.Err())
+			return fmt.Errorf("publish to %s: %w", routingKey, ctx.Err())
 		case <-time.After(backoff(attempt)):
 		}
 	}
 
-	return fmt.Errorf("publish job id after %d attempts: %w", publishRetries, lastErr)
+	return fmt.Errorf("publish to %s after %d attempts: %w", routingKey, publishRetries, lastErr)
 }
 
-func publishConfirmed(ctx context.Context, ch *amqp.Channel, jobID string) error {
+func publishConfirmed(ctx context.Context, ch *amqp.Channel, routingKey, jobID string) error {
 	conf, err := ch.PublishWithDeferredConfirmWithContext(ctx,
 		"",
-		JobsQueue,
+		routingKey,
 		false, false,
 		amqp.Publishing{
 			ContentType:  "text/plain",

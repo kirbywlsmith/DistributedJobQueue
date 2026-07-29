@@ -1,8 +1,5 @@
 # TODO
 
-## Stretch (robustness, post-demo)
-- Retries: exponential backoff via TTL queues + DLX (retries currently immediate)
-
 ## Stretch
 - Apply a real use-case for jobs
 - 'scheduled' status: delayed/scheduled job start

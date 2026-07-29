@@ -30,6 +30,9 @@ data:
         ADD COLUMN lease_expires_at TIMESTAMPTZ;
 
     CREATE INDEX idx_jobs_lease ON jobs (lease_expires_at) WHERE status = 'running';
+  003_add_next_attempt_at.sql: |
+    ALTER TABLE jobs
+        ADD COLUMN next_attempt_at TIMESTAMPTZ;
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -179,6 +179,7 @@ func (s *Store) RequeueJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error)
 			attempts = 0,
 			started_at = NULL,
 			finished_at = NULL,
+			next_attempt_at = NULL,
 			claimed_by = NULL,
 			lease_expires_at = NULL,
 			updated_at = now()
@@ -194,6 +195,7 @@ func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, li
 		SELECT id FROM jobs
 		WHERE status = 'queued'
 		  AND updated_at < now() - make_interval(secs => $1)
+		  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 		ORDER BY updated_at
 		LIMIT $2`,
 		olderThan.Seconds(), limit)
@@ -226,6 +228,7 @@ func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]uuid.UUID
 			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
 			finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
 			last_error = 'lease expired; worker vanished before recording a result',
+			next_attempt_at = NULL,
 			claimed_by = NULL,
 			lease_expires_at = NULL,
 			updated_at = now()
@@ -259,19 +262,21 @@ func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]uuid.UUID
 
 // FailJob atomically records a failed attempt. Returns ErrLostClaim if the lease
 // expired and the job now belongs to someone else.
-func (s *Store) FailJob(ctx context.Context, id uuid.UUID, workerID, errMsg string) (*jobs.Job, error) {
+func (s *Store) FailJob(ctx context.Context, id uuid.UUID, workerID, errMsg string, retryAfter time.Duration) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		UPDATE jobs
 		SET
 			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
 		    finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+			next_attempt_at = CASE WHEN attempts < max_attempts
+			                       THEN now() + make_interval(secs => $4) END,
 			last_error = $3,
 			claimed_by = NULL,
 			lease_expires_at = NULL,
 			updated_at = now()
 		WHERE id = $1 AND status = 'running' AND claimed_by = $2
 		RETURNING `+jobColumns,
-		id, workerID, errMsg)
+		id, workerID, errMsg, retryAfter.Seconds())
 
 	job, err := scanJob(row)
 	if errors.Is(err, ErrNotFound) {

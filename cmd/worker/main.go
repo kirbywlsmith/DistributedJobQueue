@@ -179,7 +179,9 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 		logger.Error("error while running the job", "err", err)
 
-		job, ferr := w.store.FailJob(bookCtx, id, w.id, err.Error())
+		retryAfter := queue.RetryDelay(job.Attempts)
+
+		job, ferr := w.store.FailJob(bookCtx, id, w.id, err.Error(), retryAfter)
 		if errors.Is(ferr, storage.ErrLostClaim) {
 			logger.Warn("claim lost before recording failure, dropping")
 			_ = d.Ack(false)
@@ -191,12 +193,13 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 			return
 		}
 		if job.Status == jobs.StatusQueued {
-			err = w.pub.PublishJobID(bookCtx, id.String())
-			if err != nil {
-				logger.Error("publish error", "err", err)
+			delay, perr := w.pub.PublishRetry(bookCtx, id.String(), job.Attempts)
+			if perr != nil {
+				logger.Error("publish error", "err", perr)
 				_ = d.Nack(false, true)
 				return
 			}
+			logger.Info("retry scheduled", "attempt", job.Attempts, "delay", delay.String())
 		}
 
 		_ = d.Ack(false)
