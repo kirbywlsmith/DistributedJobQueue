@@ -48,6 +48,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /jobs", s.handleCreateJob)
 	mux.HandleFunc("GET /jobs/{id}", s.handleGetJob)
+	mux.HandleFunc("POST /jobs/{id}/requeue", s.handleRequeueJob)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.Handle("GET /metrics", promhttp.Handler())
@@ -120,6 +121,37 @@ func (s *server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("get job", "err", err)
 		writeError(w, http.StatusInternalServerError, "error occurred while retrieving job")
 		return
+	}
+
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *server) handleRequeueJob(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid uuid")
+		return
+	}
+
+	job, err := s.store.RequeueJob(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) {
+		// The UPDATE matches on status too, so a miss means either no such job
+		// or a job that isn't failed. Re-read to tell the caller which.
+		if _, gerr := s.store.GetJob(r.Context(), id); errors.Is(gerr, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "id not found")
+			return
+		}
+		writeError(w, http.StatusConflict, "only failed jobs can be requeued")
+		return
+	}
+	if err != nil {
+		s.log.Error("requeue job", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to requeue job")
+		return
+	}
+
+	if err := s.pub.PublishJobID(r.Context(), job.ID.String()); err != nil {
+		s.log.Error("publish job id", "job_id", job.ID, "err", err)
 	}
 
 	writeJSON(w, http.StatusOK, job)

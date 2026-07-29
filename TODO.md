@@ -2,7 +2,6 @@
 
 ## Stretch (robustness, post-demo)
 - Retries: exponential backoff via TTL queues + DLX (retries currently immediate)
-- API requeue endpoint for terminally failed jobs
 
 ## Stretch
 - Apply a real use-case for jobs

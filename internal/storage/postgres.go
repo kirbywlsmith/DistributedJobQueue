@@ -169,6 +169,25 @@ func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID, workerID string) e
 	return nil
 }
 
+// RequeueJob gives a terminally failed job a fresh attempt budget.
+// Returns ErrNotFound if the job doesn't exist or isn't in 'failed'.
+func (s *Store) RequeueJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error) {
+	row := s.pool.QueryRow(ctx, `
+		UPDATE jobs
+		SET
+			status = 'queued',
+			attempts = 0,
+			started_at = NULL,
+			finished_at = NULL,
+			claimed_by = NULL,
+			lease_expires_at = NULL,
+			updated_at = now()
+		WHERE id = $1 AND status = 'failed'
+		RETURNING `+jobColumns,
+		id)
+	return scanJob(row)
+}
+
 // FindStaleQueued returns IDs of jobs that have sat in 'queued' longer than olderThan
 func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, limit int) ([]uuid.UUID, error) {
 	rows, err := s.pool.Query(ctx, `
