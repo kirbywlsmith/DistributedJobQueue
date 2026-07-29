@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -129,6 +130,67 @@ func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// FindStaleQueued returns IDs of jobs that have sat in 'queued' longer than olderThan
+func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, limit int) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id FROM jobs
+		WHERE status = 'queued'
+		  AND updated_at < now() - make_interval(secs => $1)
+		ORDER BY updated_at
+		LIMIT $2`,
+		olderThan.Seconds(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("find stale queued: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan stale queued: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ReleaseStaleRunning rescues jobs whose worker vanished without recording a result
+func (s *Store) ReleaseStaleRunning(ctx context.Context, olderThan time.Duration, limit int) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE jobs SET
+			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
+			finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+			last_error = 'worker vanished before recording a result',
+			updated_at = now()
+		WHERE id IN (
+			SELECT id FROM jobs
+			WHERE status = 'running'
+			  AND started_at < now() - make_interval(secs => $1)
+			ORDER BY started_at
+			LIMIT $2
+		)
+		RETURNING id, status`,
+		olderThan.Seconds(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("release stale running: %w", err)
+	}
+	defer rows.Close()
+
+	var requeued []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		var status jobs.Status
+		if err := rows.Scan(&id, &status); err != nil {
+			return nil, fmt.Errorf("scan stale running: %w", err)
+		}
+		if status == jobs.StatusQueued {
+			requeued = append(requeued, id)
+		}
+	}
+	return requeued, rows.Err()
 }
 
 // FailJob atomically records a failed attempt
