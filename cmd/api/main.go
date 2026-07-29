@@ -36,7 +36,7 @@ func main() {
 	}
 	defer store.Close()
 
-	pub, err := queue.NewPublisher(amqpURL)
+	pub, err := queue.NewPublisher(amqpURL, log)
 	if err != nil {
 		log.Error("connect rabbitmq", "err", err)
 		os.Exit(1)

@@ -55,14 +55,14 @@ func main() {
 	}
 	defer store.Close()
 
-	pub, err := queue.NewPublisher(amqpURL)
+	pub, err := queue.NewPublisher(amqpURL, log)
 	if err != nil {
 		log.Error("connect rabbitmq", "err", err)
 		os.Exit(1)
 	}
 	defer pub.Close()
 
-	deliveries, err := pub.Consume()
+	deliveries, err := pub.Consume(ctx)
 	if err != nil {
 		log.Error("start consuming", "err", err)
 		os.Exit(1)
@@ -77,9 +77,9 @@ func main() {
 			log.Info("shutting down")
 			return
 		case d, ok := <-deliveries:
-			if !ok { // channel closed (broker connection lost)
-				log.Error("delivery channel closed")
-				os.Exit(1)
+			if !ok {
+				log.Info("consumer stopped, shutting down")
+				return
 			}
 			w.handleDelivery(ctx, d)
 		}
