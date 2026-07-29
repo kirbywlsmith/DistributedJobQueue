@@ -15,4 +15,5 @@
 - Per-type queues: workers bind only to job types they handle
 
 ## Final
+- Write tests
 - Update README.md
