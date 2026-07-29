@@ -1,9 +1,5 @@
 # TODO
 
-## Demo
-- Burst-submit CPU jobs, watch workers scale 1 => 10 in Grafana
-- Kill worker mid-job, show job still completes
-
 ## Stretch (robustness, post-demo)
 - Reconciler: periodically republish stale 'queued' jobs (covers lost publishes)
 - Retries: exponential backoff via TTL queues + DLX (retries currently immediate)
@@ -17,3 +13,6 @@
 - Runs table: one row per attempt (worker, timings, error) + retention policy
 - Priority queues
 - Per-type queues: workers bind only to job types they handle
+
+## Final
+- Update README.md
