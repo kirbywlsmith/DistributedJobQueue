@@ -1,7 +1,6 @@
 # TODO
 
 ## Stretch (robustness, post-demo)
-- Ensure the reconciler can't collide with a live worker
 - Retries: exponential backoff via TTL queues + DLX (retries currently immediate)
 - API requeue endpoint for terminally failed jobs
 

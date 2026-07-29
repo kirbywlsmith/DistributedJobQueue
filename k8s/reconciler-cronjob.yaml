@@ -44,6 +44,3 @@ spec:
             # republished, short enough that a genuine orphan is caught quickly.
             - name: STALE_QUEUED_SECONDS
               value: "120"
-            # Must exceed your longest expected job, or live work gets yanked.
-            - name: STALE_RUNNING_SECONDS
-              value: "900"

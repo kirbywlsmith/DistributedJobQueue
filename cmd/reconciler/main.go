@@ -20,7 +20,6 @@ func main() {
 	amqpURL := envOr("AMQP_URL", "amqp://jobqueue:jobqueue@localhost:5672/")
 
 	staleQueued := envDuration("STALE_QUEUED_SECONDS", 2*time.Minute, log)
-	staleRunning := envDuration("STALE_RUNNING_SECONDS", 15*time.Minute, log)
 	limit := envInt("RECONCILE_LIMIT", 100, log)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -40,7 +39,7 @@ func main() {
 	}
 	defer pub.Close()
 
-	rescued, err := store.ReleaseStaleRunning(ctx, staleRunning, limit)
+	rescued, err := store.ReleaseStaleRunning(ctx, limit)
 	if err != nil {
 		log.Error("release stale running", "err", err)
 		os.Exit(1)

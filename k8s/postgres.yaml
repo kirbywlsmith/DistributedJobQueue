@@ -24,6 +24,12 @@ data:
     );
 
     CREATE INDEX idx_jobs_status ON jobs (status, created_at);
+  002_add_claim_lease.sql: |
+    ALTER TABLE jobs
+        ADD COLUMN claimed_by       TEXT,
+        ADD COLUMN lease_expires_at TIMESTAMPTZ;
+
+    CREATE INDEX idx_jobs_lease ON jobs (lease_expires_at) WHERE status = 'running';
 ---
 apiVersion: apps/v1
 kind: Deployment

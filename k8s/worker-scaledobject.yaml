@@ -6,7 +6,7 @@ spec:
   secretTargetRef:
   - parameter: host
     name: jobqueue-credentials
-    key: AMQP_URL
+    key: RABBITMQ_MANAGEMENT_URL
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -22,7 +22,8 @@ spec:
   triggers:
   - type: rabbitmq
     metadata:
-      protocol: amqp
+      protocol: http
+      vhostName: "/"      # default vhost; explicit so it isn't parsed from the URL path
       queueName: jobs
       mode: QueueLength
       value: "5"

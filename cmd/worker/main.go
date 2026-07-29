@@ -21,10 +21,24 @@ import (
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/storage"
 )
 
+const (
+	leaseDuration = 60 * time.Second
+	leaseRenewEvery = 20 * time.Second
+)
+
 type worker struct {
 	store *storage.Store
 	pub   *queue.Publisher
 	log   *slog.Logger
+	id    string // identifies this process as the claimant of a job
+}
+
+func workerID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return host + "/" + uuid.NewString()[:8]
 }
 
 func main() {
@@ -68,8 +82,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	w := &worker{store: store, pub: pub, log: log}
-	log.Info("worker started")
+	w := &worker{store: store, pub: pub, log: log, id: workerID()}
+	log.Info("worker started", "worker_id", w.id)
 
 	for {
 		select {
@@ -123,7 +137,7 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 	logger.Info("starting job")
 
-	job, err = w.store.StartJob(ctx, id)
+	job, err = w.store.StartJob(ctx, id, w.id, leaseDuration)
 	if errors.Is(err, storage.ErrNotFound) {
 		logger.Warn("unable to start the job")
 		_ = d.Ack(false)
@@ -137,16 +151,21 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 	logger.Info("running job")
 
+	hbCtx, stopHeartbeat := context.WithCancel(ctx)
+	go w.renewLease(hbCtx, id, logger)
+
 	start := time.Now()
 	res, err := handler(ctx, job.Payload)
 	elapsed := time.Since(start)
+
+	stopHeartbeat()
 
 	bookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
 	if ctx.Err() != nil {
 		logger.Info("interrupted by shutdown, releasing job")
-		if rerr := w.store.ReleaseJob(bookCtx, id); rerr != nil {
+		if rerr := w.store.ReleaseJob(bookCtx, id, w.id); rerr != nil {
 			logger.Error("release job", "err", rerr)
 		}
 		_ = d.Nack(false, true)
@@ -160,7 +179,12 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 
 		logger.Error("error while running the job", "err", err)
 
-		job, ferr := w.store.FailJob(bookCtx, id, err.Error())
+		job, ferr := w.store.FailJob(bookCtx, id, w.id, err.Error())
+		if errors.Is(ferr, storage.ErrLostClaim) {
+			logger.Warn("claim lost before recording failure, dropping")
+			_ = d.Ack(false)
+			return
+		}
 		if ferr != nil {
 			logger.Error("record failure", "err", ferr)
 			_ = d.Nack(false, true)
@@ -179,7 +203,12 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	err = w.store.CompleteJob(bookCtx, id, res)
+	err = w.store.CompleteJob(bookCtx, id, w.id, res)
+	if errors.Is(err, storage.ErrLostClaim) {
+		logger.Warn("claim lost before recording completion, discarding result")
+		_ = d.Ack(false)
+		return
+	}
 	if err != nil {
 		logger.Error("record completion", "err", err)
 		_ = d.Nack(false, true)
@@ -189,6 +218,30 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 	metrics.JobsProcessed.WithLabelValues(job.Type, "completed").Inc()
 
 	_ = d.Ack(false)
+}
+
+func (w *worker) renewLease(ctx context.Context, id uuid.UUID, logger *slog.Logger) {
+	ticker := time.NewTicker(leaseRenewEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			err := w.store.RenewLease(rctx, id, w.id, leaseDuration)
+			cancel()
+
+			if errors.Is(err, storage.ErrLostClaim) {
+				logger.Warn("lease lost, another worker owns this job now")
+				return
+			}
+			if err != nil {
+				logger.Warn("renew lease", "err", err)
+			}
+		}
+	}
 }
 
 func envOr(key, fallback string) string {

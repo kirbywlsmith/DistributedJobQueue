@@ -78,56 +78,93 @@ func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error) {
 	return scanJob(row)
 }
 
-// StartJob atomically transitions a job from queued to running
-func (s *Store) StartJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error) {
+// ErrLostClaim means the job is no longer ours: the lease expired and the
+// reconciler handed it to someone else, so our result is stale and must not be
+// written. Distinct from ErrNotFound, which means we never had the claim.
+var ErrLostClaim = errors.New("claim lost")
+
+// StartJob atomically transitions a job from queued to running and takes a lease
+// on it. workerID identifies the claimant; only that claimant may finish the job.
+func (s *Store) StartJob(ctx context.Context, id uuid.UUID, workerID string, lease time.Duration) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		UPDATE jobs
 		SET
 			status = 'running',
 			attempts = attempts + 1,
 		    started_at = now(),
+			claimed_by = $2,
+			lease_expires_at = now() + make_interval(secs => $3),
 			updated_at = now()
 		WHERE id = $1 AND status = 'queued'
 		RETURNING `+jobColumns,
-		id)
+		id, workerID, lease.Seconds())
 	return scanJob(row)
 }
 
-// CompleteJob atomically records a successful result
-func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, result json.RawMessage) error {
+// RenewLease pushes out the lease while the handler is still working, so a long
+// job isn't mistaken for an abandoned one. Returns ErrLostClaim if we no longer
+// own the job - the caller should stop, since anything it writes would be stale.
+func (s *Store) RenewLease(ctx context.Context, id uuid.UUID, workerID string, lease time.Duration) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs
 		SET
-			status = 'completed',
-			result = $2,
-		    finished_at = now(),
+			lease_expires_at = now() + make_interval(secs => $3),
 			updated_at = now()
-		WHERE id = $1 AND status = 'running'`,
-		id, result)
+		WHERE id = $1 AND status = 'running' AND claimed_by = $2`,
+		id, workerID, lease.Seconds())
 	if err != nil {
-		return fmt.Errorf("complete job: %w", err)
+		return fmt.Errorf("renew lease: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+		return ErrLostClaim
 	}
 	return nil
 }
 
-func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID) error {
+// CompleteJob atomically records a successful result.
+//
+// The claimed_by check is what stops a worker whose lease expired from
+// overwriting the result of whoever picked the job up afterwards.
+func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, workerID string, result json.RawMessage) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET
+			status = 'completed',
+			result = $3,
+		    finished_at = now(),
+			claimed_by = NULL,
+			lease_expires_at = NULL,
+			updated_at = now()
+		WHERE id = $1 AND status = 'running' AND claimed_by = $2`,
+		id, workerID, result)
+	if err != nil {
+		return fmt.Errorf("complete job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLostClaim
+	}
+	return nil
+}
+
+// ReleaseJob puts a running job back on the queue without consuming an attempt,
+// for when the worker is interrupted rather than the job failing.
+func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID, workerID string) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs
 		SET
 			status = 'queued',
 			attempts = GREATEST(attempts - 1, 0),
 			started_at = NULL,
+			claimed_by = NULL,
+			lease_expires_at = NULL,
 			updated_at = now()
-		WHERE id = $1 AND status = 'running'`,
-		id)
+		WHERE id = $1 AND status = 'running' AND claimed_by = $2`,
+		id, workerID)
 	if err != nil {
 		return fmt.Errorf("release job: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+		return ErrLostClaim
 	}
 	return nil
 }
@@ -157,23 +194,31 @@ func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, li
 	return ids, rows.Err()
 }
 
-// ReleaseStaleRunning rescues jobs whose worker vanished without recording a result
-func (s *Store) ReleaseStaleRunning(ctx context.Context, olderThan time.Duration, limit int) ([]uuid.UUID, error) {
+// ReleaseStaleRunning rescues jobs whose worker vanished without recording a
+// result - SIGKILL, OOM, or a node dying, none of which run the graceful path.
+//
+// Expiry is the lease, not a guess from started_at: a live worker renews its
+// lease, so an expired one means the worker really is gone. Rows with a NULL
+// lease are never touched (NULL < now() is NULL, so they don't match), which
+// keeps jobs claimed by a pre-lease binary safe during a rolling upgrade.
+func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]uuid.UUID, error) {
 	rows, err := s.pool.Query(ctx, `
 		UPDATE jobs SET
 			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
 			finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
-			last_error = 'worker vanished before recording a result',
+			last_error = 'lease expired; worker vanished before recording a result',
+			claimed_by = NULL,
+			lease_expires_at = NULL,
 			updated_at = now()
 		WHERE id IN (
 			SELECT id FROM jobs
 			WHERE status = 'running'
-			  AND started_at < now() - make_interval(secs => $1)
-			ORDER BY started_at
-			LIMIT $2
+			  AND lease_expires_at < now()
+			ORDER BY lease_expires_at
+			LIMIT $1
 		)
 		RETURNING id, status`,
-		olderThan.Seconds(), limit)
+		limit)
 	if err != nil {
 		return nil, fmt.Errorf("release stale running: %w", err)
 	}
@@ -193,17 +238,25 @@ func (s *Store) ReleaseStaleRunning(ctx context.Context, olderThan time.Duration
 	return requeued, rows.Err()
 }
 
-// FailJob atomically records a failed attempt
-func (s *Store) FailJob(ctx context.Context, id uuid.UUID, errMsg string) (*jobs.Job, error) {
+// FailJob atomically records a failed attempt. Returns ErrLostClaim if the lease
+// expired and the job now belongs to someone else.
+func (s *Store) FailJob(ctx context.Context, id uuid.UUID, workerID, errMsg string) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
 		UPDATE jobs
 		SET
 			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
 		    finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
-			last_error = $2,
+			last_error = $3,
+			claimed_by = NULL,
+			lease_expires_at = NULL,
 			updated_at = now()
-		WHERE id = $1 AND status = 'running'
+		WHERE id = $1 AND status = 'running' AND claimed_by = $2
 		RETURNING `+jobColumns,
-		id, errMsg)
-	return scanJob(row)
+		id, workerID, errMsg)
+
+	job, err := scanJob(row)
+	if errors.Is(err, ErrNotFound) {
+		return nil, ErrLostClaim
+	}
+	return job, err
 }
