@@ -34,3 +34,25 @@ type Job struct {
 
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
+
+type RunStatus string
+
+const (
+	RunCompleted RunStatus = "completed"
+	RunFailed    RunStatus = "failed"
+	RunReleased  RunStatus = "released"
+	RunAbandoned RunStatus = "abandoned"
+)
+
+// Run is one attempt at a job. Jobs hold current state and overwrite it on
+// every retry; runs are the append-only history of what actually happened.
+type Run struct {
+	ID         int64     `json:"id"`
+	JobID      uuid.UUID `json:"job_id"`
+	Attempt    int       `json:"attempt"`
+	WorkerID   string    `json:"worker_id"`
+	Status     RunStatus `json:"status"`
+	Error      *string   `json:"error,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}

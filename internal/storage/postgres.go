@@ -135,17 +135,24 @@ func (s *Store) RenewLease(ctx context.Context, id uuid.UUID, workerID string, l
 //
 // The claimed_by check is what stops a worker whose lease expired from
 // overwriting the result of whoever picked the job up afterwards.
+// The run row is written by the same statement as the state change, so an
+// attempt can never be recorded without the job moving, or vice versa.
 func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, workerID string, result json.RawMessage) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jobs
-		SET
-			status = 'completed',
-			result = $3,
-		    finished_at = now(),
-			claimed_by = NULL,
-			lease_expires_at = NULL,
-			updated_at = now()
-		WHERE id = $1 AND status = 'running' AND claimed_by = $2`,
+		WITH updated AS (
+			UPDATE jobs
+			SET
+				status = 'completed',
+				result = $3,
+				finished_at = now(),
+				claimed_by = NULL,
+				lease_expires_at = NULL,
+				updated_at = now()
+			WHERE id = $1 AND status = 'running' AND claimed_by = $2
+			RETURNING id, attempts, started_at
+		)
+		INSERT INTO job_runs (job_id, attempt, worker_id, status, started_at)
+		SELECT id, attempts, $2, 'completed', started_at FROM updated`,
 		id, workerID, result)
 	if err != nil {
 		return fmt.Errorf("complete job: %w", err)
@@ -158,17 +165,29 @@ func (s *Store) CompleteJob(ctx context.Context, id uuid.UUID, workerID string, 
 
 // ReleaseJob puts a running job back on the queue without consuming an attempt,
 // for when the worker is interrupted rather than the job failing.
+// The release clears started_at and rolls attempts back, so the run row is
+// built from `before` - a snapshot the whole statement shares, taken as the
+// row looked prior to the update.
 func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID, workerID string) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE jobs
-		SET
-			status = 'queued',
-			attempts = GREATEST(attempts - 1, 0),
-			started_at = NULL,
-			claimed_by = NULL,
-			lease_expires_at = NULL,
-			updated_at = now()
-		WHERE id = $1 AND status = 'running' AND claimed_by = $2`,
+		WITH before AS (
+			SELECT id, attempts, started_at FROM jobs
+			WHERE id = $1 AND status = 'running' AND claimed_by = $2
+		), updated AS (
+			UPDATE jobs
+			SET
+				status = 'queued',
+				attempts = GREATEST(attempts - 1, 0),
+				started_at = NULL,
+				claimed_by = NULL,
+				lease_expires_at = NULL,
+				updated_at = now()
+			WHERE id IN (SELECT id FROM before)
+			RETURNING id
+		)
+		INSERT INTO job_runs (job_id, attempt, worker_id, status, started_at)
+		SELECT b.id, b.attempts, $2, 'released', b.started_at
+		FROM before b JOIN updated u ON u.id = b.id`,
 		id, workerID)
 	if err != nil {
 		return fmt.Errorf("release job: %w", err)
@@ -263,22 +282,30 @@ func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, li
 // keeps jobs claimed by a pre-lease binary safe during a rolling upgrade.
 func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]PendingJob, error) {
 	rows, err := s.pool.Query(ctx, `
-		UPDATE jobs SET
-			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
-			finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
-			last_error = 'lease expired; worker vanished before recording a result',
-			next_attempt_at = NULL,
-			claimed_by = NULL,
-			lease_expires_at = NULL,
-			updated_at = now()
-		WHERE id IN (
-			SELECT id FROM jobs
+		WITH victims AS (
+			SELECT id, attempts, claimed_by, started_at FROM jobs
 			WHERE status = 'running'
 			  AND lease_expires_at < now()
 			ORDER BY lease_expires_at
 			LIMIT $1
+		), updated AS (
+			UPDATE jobs SET
+				status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
+				finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+				last_error = 'lease expired; worker vanished before recording a result',
+				next_attempt_at = NULL,
+				claimed_by = NULL,
+				lease_expires_at = NULL,
+				updated_at = now()
+			WHERE id IN (SELECT id FROM victims)
+			RETURNING id, status, priority
+		), logged AS (
+			INSERT INTO job_runs (job_id, attempt, worker_id, status, error, started_at)
+			SELECT id, attempts, claimed_by, 'abandoned',
+			       'lease expired; worker vanished before recording a result', started_at
+			FROM victims
 		)
-		RETURNING id, status, priority`,
+		SELECT id, status, priority FROM updated`,
 		limit)
 	if err != nil {
 		return nil, fmt.Errorf("release stale running: %w", err)
@@ -303,18 +330,24 @@ func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]PendingJo
 // expired and the job now belongs to someone else.
 func (s *Store) FailJob(ctx context.Context, id uuid.UUID, workerID, errMsg string, retryAfter time.Duration) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
-		UPDATE jobs
-		SET
-			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
-		    finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
-			next_attempt_at = CASE WHEN attempts < max_attempts
-			                       THEN now() + make_interval(secs => $4) END,
-			last_error = $3,
-			claimed_by = NULL,
-			lease_expires_at = NULL,
-			updated_at = now()
-		WHERE id = $1 AND status = 'running' AND claimed_by = $2
-		RETURNING `+jobColumns,
+		WITH updated AS (
+			UPDATE jobs
+			SET
+				status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
+				finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+				next_attempt_at = CASE WHEN attempts < max_attempts
+				                       THEN now() + make_interval(secs => $4) END,
+				last_error = $3,
+				claimed_by = NULL,
+				lease_expires_at = NULL,
+				updated_at = now()
+			WHERE id = $1 AND status = 'running' AND claimed_by = $2
+			RETURNING `+jobColumns+`
+		), logged AS (
+			INSERT INTO job_runs (job_id, attempt, worker_id, status, error, started_at)
+			SELECT id, attempts, $2, 'failed', $3, started_at FROM updated
+		)
+		SELECT `+jobColumns+` FROM updated`,
 		id, workerID, errMsg, retryAfter.Seconds())
 
 	job, err := scanJob(row)
@@ -322,4 +355,39 @@ func (s *Store) FailJob(ctx context.Context, id uuid.UUID, workerID, errMsg stri
 		return nil, ErrLostClaim
 	}
 	return job, err
+}
+
+const runColumns = `id, job_id, attempt, worker_id, status, error, started_at, finished_at`
+
+// ListRuns returns every recorded attempt at a job, oldest first.
+func (s *Store) ListRuns(ctx context.Context, jobID uuid.UUID) ([]jobs.Run, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+runColumns+` FROM job_runs WHERE job_id = $1 ORDER BY attempt, id`, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer rows.Close()
+
+	runs := []jobs.Run{}
+	for rows.Next() {
+		var r jobs.Run
+		if err := rows.Scan(&r.ID, &r.JobID, &r.Attempt, &r.WorkerID, &r.Status,
+			&r.Error, &r.StartedAt, &r.FinishedAt); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+// PruneRuns drops run history past the retention window. Without this the
+// table grows without bound - one row per attempt, forever.
+func (s *Store) PruneRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM job_runs WHERE finished_at < now() - make_interval(secs => $1)`,
+		olderThan.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("prune runs: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

@@ -50,6 +50,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /jobs", s.handleCreateJob)
 	mux.HandleFunc("GET /jobs/{id}", s.handleGetJob)
+	mux.HandleFunc("GET /jobs/{id}/runs", s.handleListRuns)
 	mux.HandleFunc("POST /jobs/{id}/requeue", s.handleRequeueJob)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
@@ -141,6 +142,29 @@ func (s *server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid uuid")
+		return
+	}
+
+	// Check the job first so an unknown id is a 404 rather than an empty list.
+	if _, err := s.store.GetJob(r.Context(), id); errors.Is(err, storage.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "id not found")
+		return
+	}
+
+	runs, err := s.store.ListRuns(r.Context(), id)
+	if err != nil {
+		s.log.Error("list runs", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to list runs")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, runs)
 }
 
 func (s *server) handleRequeueJob(w http.ResponseWriter, r *http.Request) {

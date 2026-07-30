@@ -21,6 +21,7 @@ func main() {
 
 	staleQueued := envDuration("STALE_QUEUED_SECONDS", 2*time.Minute, log)
 	limit := envInt("RECONCILE_LIMIT", 100, log)
+	runRetention := time.Duration(envInt("RUN_RETENTION_DAYS", 7, log)) * 24 * time.Hour
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -73,8 +74,14 @@ func main() {
 		republished++
 	}
 
+	pruned, err := store.PruneRuns(ctx, runRetention)
+	if err != nil {
+		log.Error("prune runs", "err", err)
+	}
+
 	log.Info("reconcile complete",
 		"rescued", len(rescued),
+		"runs_pruned", pruned,
 		"promoted", len(promoted),
 		"stale_queued", len(stale),
 		"republished", republished,
