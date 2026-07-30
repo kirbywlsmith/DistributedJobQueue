@@ -43,14 +43,19 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
-const jobColumns = `id, job_type, payload, status, attempts, max_attempts,
+const jobColumns = `id, job_type, payload, status, attempts, max_attempts, priority,
 	result, last_error, created_at, updated_at, started_at, finished_at, next_attempt_at`
+
+type PendingJob struct {
+	ID       uuid.UUID
+	Priority int
+}
 
 // scanJob reads one row into a Job. pgx.Row covers both QueryRow results and collected rows
 func scanJob(row pgx.Row) (*jobs.Job, error) {
 	var j jobs.Job
 	err := row.Scan(
-		&j.ID, &j.Type, &j.Payload, &j.Status, &j.Attempts, &j.MaxAttempts,
+		&j.ID, &j.Type, &j.Payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.Priority,
 		&j.Result, &j.LastError, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.FinishedAt,
 		&j.NextAttemptAt,
 	)
@@ -66,14 +71,14 @@ func scanJob(row pgx.Row) (*jobs.Job, error) {
 // CreateJob inserts a new job and returns the full row (the DB generates the ID
 // and timestamps). A non-nil runAt holds the job in 'scheduled' until the
 // reconciler promotes it; nil queues it for immediate publication.
-func (s *Store) CreateJob(ctx context.Context, jobType string, payload json.RawMessage, maxAttempts int, runAt *time.Time) (*jobs.Job, error) {
+func (s *Store) CreateJob(ctx context.Context, jobType string, payload json.RawMessage, maxAttempts, priority int, runAt *time.Time) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO jobs (job_type, payload, max_attempts, status, next_attempt_at)
-		VALUES ($1, $2, $3,
-			CASE WHEN $4::timestamptz IS NULL THEN 'queued' ELSE 'scheduled' END::job_status,
-			$4)
+		INSERT INTO jobs (job_type, payload, max_attempts, priority, status, next_attempt_at)
+		VALUES ($1, $2, $3, $4,
+			CASE WHEN $5::timestamptz IS NULL THEN 'queued' ELSE 'scheduled' END::job_status,
+			$5)
 		RETURNING `+jobColumns,
-		jobType, payload, maxAttempts, runAt)
+		jobType, payload, maxAttempts, priority, runAt)
 	return scanJob(row)
 }
 
@@ -196,7 +201,7 @@ func (s *Store) RequeueJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error)
 
 // PromoteDueScheduled moves scheduled jobs whose start time has arrived into
 // 'queued' and returns them so the caller can publish them.
-func (s *Store) PromoteDueScheduled(ctx context.Context, limit int) ([]uuid.UUID, error) {
+func (s *Store) PromoteDueScheduled(ctx context.Context, limit int) ([]PendingJob, error) {
 	rows, err := s.pool.Query(ctx, `
 		UPDATE jobs SET
 			status = 'queued',
@@ -209,32 +214,36 @@ func (s *Store) PromoteDueScheduled(ctx context.Context, limit int) ([]uuid.UUID
 			ORDER BY next_attempt_at
 			LIMIT $1
 		)
-		RETURNING id`,
+		RETURNING id, priority`,
 		limit)
 	if err != nil {
 		return nil, fmt.Errorf("promote due scheduled: %w", err)
 	}
 	defer rows.Close()
 
-	var ids []uuid.UUID
+	return scanPending(rows, "promoted scheduled")
+}
+
+func scanPending(rows pgx.Rows, what string) ([]PendingJob, error) {
+	var out []PendingJob
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan promoted scheduled: %w", err)
+		var p PendingJob
+		if err := rows.Scan(&p.ID, &p.Priority); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", what, err)
 		}
-		ids = append(ids, id)
+		out = append(out, p)
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
 }
 
 // FindStaleQueued returns IDs of jobs that have sat in 'queued' longer than olderThan
-func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, limit int) ([]uuid.UUID, error) {
+func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, limit int) ([]PendingJob, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id FROM jobs
+		SELECT id, priority FROM jobs
 		WHERE status = 'queued'
 		  AND updated_at < now() - make_interval(secs => $1)
 		  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-		ORDER BY updated_at
+		ORDER BY priority DESC, updated_at
 		LIMIT $2`,
 		olderThan.Seconds(), limit)
 	if err != nil {
@@ -242,15 +251,7 @@ func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, li
 	}
 	defer rows.Close()
 
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan stale queued: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return scanPending(rows, "stale queued")
 }
 
 // ReleaseStaleRunning rescues jobs whose worker vanished without recording a
@@ -260,7 +261,7 @@ func (s *Store) FindStaleQueued(ctx context.Context, olderThan time.Duration, li
 // lease, so an expired one means the worker really is gone. Rows with a NULL
 // lease are never touched (NULL < now() is NULL, so they don't match), which
 // keeps jobs claimed by a pre-lease binary safe during a rolling upgrade.
-func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]uuid.UUID, error) {
+func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]PendingJob, error) {
 	rows, err := s.pool.Query(ctx, `
 		UPDATE jobs SET
 			status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END::job_status,
@@ -277,22 +278,22 @@ func (s *Store) ReleaseStaleRunning(ctx context.Context, limit int) ([]uuid.UUID
 			ORDER BY lease_expires_at
 			LIMIT $1
 		)
-		RETURNING id, status`,
+		RETURNING id, status, priority`,
 		limit)
 	if err != nil {
 		return nil, fmt.Errorf("release stale running: %w", err)
 	}
 	defer rows.Close()
 
-	var requeued []uuid.UUID
+	var requeued []PendingJob
 	for rows.Next() {
-		var id uuid.UUID
+		var p PendingJob
 		var status jobs.Status
-		if err := rows.Scan(&id, &status); err != nil {
+		if err := rows.Scan(&p.ID, &status, &p.Priority); err != nil {
 			return nil, fmt.Errorf("scan stale running: %w", err)
 		}
 		if status == jobs.StatusQueued {
-			requeued = append(requeued, id)
+			requeued = append(requeued, p)
 		}
 	}
 	return requeued, rows.Err()

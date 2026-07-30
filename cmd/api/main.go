@@ -74,6 +74,7 @@ type createJobRequest struct {
 	Type        string          `json:"type"`
 	Payload     json.RawMessage `json:"payload"`
 	MaxAttempts int             `json:"max_attempts"`
+	Priority    int             `json:"priority"`
 	RunAt       *time.Time      `json:"run_at"`
 }
 
@@ -94,12 +95,14 @@ func (s *server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		req.MaxAttempts = 5
 	}
 
+	priority := min(max(req.Priority, 0), queue.MaxPriority)
+
 	runAt := req.RunAt
 	if runAt != nil && !runAt.After(time.Now()) {
 		runAt = nil
 	}
 
-	job, err := s.store.CreateJob(r.Context(), req.Type, req.Payload, req.MaxAttempts, runAt)
+	job, err := s.store.CreateJob(r.Context(), req.Type, req.Payload, req.MaxAttempts, priority, runAt)
 	if err != nil {
 		s.log.Error("create job", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create job")
@@ -112,7 +115,7 @@ func (s *server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.pub.PublishJobID(r.Context(), job.ID.String()); err != nil {
+	if err := s.pub.PublishJobID(r.Context(), job.ID.String(), job.Priority); err != nil {
 		s.log.Error("publish job id", "job_id", job.ID, "err", err)
 	}
 
@@ -164,7 +167,7 @@ func (s *server) handleRequeueJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.pub.PublishJobID(r.Context(), job.ID.String()); err != nil {
+	if err := s.pub.PublishJobID(r.Context(), job.ID.String(), job.Priority); err != nil {
 		s.log.Error("publish job id", "job_id", job.ID, "err", err)
 	}
 

@@ -19,6 +19,8 @@ const (
 	publishRetries = 5
 )
 
+const MaxPriority = 5
+
 var retryDelays = []time.Duration{
 	5 * time.Second,
 	30 * time.Second,
@@ -78,7 +80,8 @@ func (p *Publisher) connect() error {
 		return fmt.Errorf("open channel: %w", err)
 	}
 	// durable=true: the queue definition survives a broker restart.
-	if _, err := ch.QueueDeclare(JobsQueue, true, false, false, false, nil); err != nil {
+	jobsArgs := amqp.Table{"x-max-priority": int32(MaxPriority)}
+	if _, err := ch.QueueDeclare(JobsQueue, true, false, false, false, jobsArgs); err != nil {
 		ch.Close()
 		conn.Close()
 		return fmt.Errorf("declare queue: %w", err)
@@ -251,23 +254,23 @@ func (p *Publisher) resubscribe(ctx context.Context) (<-chan amqp.Delivery, erro
 	}
 }
 
-func (p *Publisher) PublishJobID(ctx context.Context, jobID string) error {
-	return p.publish(ctx, JobsQueue, jobID)
+func (p *Publisher) PublishJobID(ctx context.Context, jobID string, priority int) error {
+	return p.publish(ctx, JobsQueue, jobID, priority)
 }
 
-func (p *Publisher) PublishRetry(ctx context.Context, jobID string, attempt int) (time.Duration, error) {
+func (p *Publisher) PublishRetry(ctx context.Context, jobID string, attempt, priority int) (time.Duration, error) {
 	d := RetryDelay(attempt)
-	return d, p.publish(ctx, retryQueueName(d), jobID)
+	return d, p.publish(ctx, retryQueueName(d), jobID, priority)
 }
 
-func (p *Publisher) publish(ctx context.Context, routingKey, jobID string) error {
+func (p *Publisher) publish(ctx context.Context, routingKey, jobID string, priority int) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= publishRetries; attempt++ {
 		ch := p.channel()
 		if ch == nil {
 			lastErr = errors.New("no amqp channel")
-		} else if err := publishConfirmed(ctx, ch, routingKey, jobID); err != nil {
+		} else if err := publishConfirmed(ctx, ch, routingKey, jobID, priority); err != nil {
 			lastErr = err
 		} else {
 			if attempt > 1 {
@@ -286,7 +289,7 @@ func (p *Publisher) publish(ctx context.Context, routingKey, jobID string) error
 	return fmt.Errorf("publish to %s after %d attempts: %w", routingKey, publishRetries, lastErr)
 }
 
-func publishConfirmed(ctx context.Context, ch *amqp.Channel, routingKey, jobID string) error {
+func publishConfirmed(ctx context.Context, ch *amqp.Channel, routingKey, jobID string, priority int) error {
 	conf, err := ch.PublishWithDeferredConfirmWithContext(ctx,
 		"",
 		routingKey,
@@ -295,6 +298,7 @@ func publishConfirmed(ctx context.Context, ch *amqp.Channel, routingKey, jobID s
 			ContentType:  "text/plain",
 			Body:         []byte(jobID),
 			DeliveryMode: amqp.Persistent, // message survives a broker restart (with a durable queue)
+			Priority:     uint8(priority),
 		})
 	if err != nil {
 		return err

@@ -193,7 +193,7 @@ func (w *worker) handleDelivery(ctx context.Context, d amqp.Delivery) {
 			return
 		}
 		if job.Status == jobs.StatusQueued {
-			delay, perr := w.pub.PublishRetry(bookCtx, id.String(), job.Attempts)
+			delay, perr := w.pub.PublishRetry(bookCtx, id.String(), job.Attempts, job.Priority)
 			if perr != nil {
 				logger.Error("publish error", "err", perr)
 				_ = d.Nack(false, true)

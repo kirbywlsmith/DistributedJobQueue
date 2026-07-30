@@ -64,9 +64,9 @@ func main() {
 	}
 
 	republished, failed := 0, 0
-	for _, id := range dedupe(rescued, promoted, stale) {
-		if err := pub.PublishJobID(ctx, id.String()); err != nil {
-			log.Error("republish", "job_id", id, "err", err)
+	for _, p := range dedupe(rescued, promoted, stale) {
+		if err := pub.PublishJobID(ctx, p.ID.String(), p.Priority); err != nil {
+			log.Error("republish", "job_id", p.ID, "err", err)
 			failed++
 			continue
 		}
@@ -85,16 +85,16 @@ func main() {
 	}
 }
 
-func dedupe(sets ...[]uuid.UUID) []uuid.UUID {
+func dedupe(sets ...[]storage.PendingJob) []storage.PendingJob {
 	seen := make(map[uuid.UUID]struct{})
-	var out []uuid.UUID
+	var out []storage.PendingJob
 	for _, set := range sets {
-		for _, id := range set {
-			if _, dup := seen[id]; dup {
+		for _, p := range set {
+			if _, dup := seen[p.ID]; dup {
 				continue
 			}
-			seen[id] = struct{}{}
-			out = append(out, id)
+			seen[p.ID] = struct{}{}
+			out = append(out, p)
 		}
 	}
 	return out
