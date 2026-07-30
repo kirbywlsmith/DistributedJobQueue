@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/kirbywlsmith/DistributedJobQueue/internal/jobs"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/queue"
 	"github.com/kirbywlsmith/DistributedJobQueue/internal/storage"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -67,11 +69,12 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// createJobRequest is the POST /jobs body.
+// createJobRequest is the POST /jobs body. RunAt is RFC 3339 and optional.
 type createJobRequest struct {
 	Type        string          `json:"type"`
 	Payload     json.RawMessage `json:"payload"`
 	MaxAttempts int             `json:"max_attempts"`
+	RunAt       *time.Time      `json:"run_at"`
 }
 
 func (s *server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
@@ -91,10 +94,21 @@ func (s *server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		req.MaxAttempts = 5
 	}
 
-	job, err := s.store.CreateJob(r.Context(), req.Type, req.Payload, req.MaxAttempts)
+	runAt := req.RunAt
+	if runAt != nil && !runAt.After(time.Now()) {
+		runAt = nil
+	}
+
+	job, err := s.store.CreateJob(r.Context(), req.Type, req.Payload, req.MaxAttempts, runAt)
 	if err != nil {
 		s.log.Error("create job", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to create job")
+		return
+	}
+
+	if job.Status == jobs.StatusScheduled {
+		s.log.Info("job scheduled", "job_id", job.ID, "run_at", runAt)
+		writeJSON(w, http.StatusCreated, job)
 		return
 	}
 

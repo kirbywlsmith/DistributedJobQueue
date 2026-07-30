@@ -44,7 +44,7 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 const jobColumns = `id, job_type, payload, status, attempts, max_attempts,
-	result, last_error, created_at, updated_at, started_at, finished_at`
+	result, last_error, created_at, updated_at, started_at, finished_at, next_attempt_at`
 
 // scanJob reads one row into a Job. pgx.Row covers both QueryRow results and collected rows
 func scanJob(row pgx.Row) (*jobs.Job, error) {
@@ -52,6 +52,7 @@ func scanJob(row pgx.Row) (*jobs.Job, error) {
 	err := row.Scan(
 		&j.ID, &j.Type, &j.Payload, &j.Status, &j.Attempts, &j.MaxAttempts,
 		&j.Result, &j.LastError, &j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.FinishedAt,
+		&j.NextAttemptAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -62,13 +63,17 @@ func scanJob(row pgx.Row) (*jobs.Job, error) {
 	return &j, nil
 }
 
-// CreateJob inserts a new queued job and returns the full row (the DB generates the ID and timestamps)
-func (s *Store) CreateJob(ctx context.Context, jobType string, payload json.RawMessage, maxAttempts int) (*jobs.Job, error) {
+// CreateJob inserts a new job and returns the full row (the DB generates the ID
+// and timestamps). A non-nil runAt holds the job in 'scheduled' until the
+// reconciler promotes it; nil queues it for immediate publication.
+func (s *Store) CreateJob(ctx context.Context, jobType string, payload json.RawMessage, maxAttempts int, runAt *time.Time) (*jobs.Job, error) {
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO jobs (job_type, payload, max_attempts)
-		VALUES ($1, $2, $3)
-		RETURNING ` + jobColumns,
-		jobType, payload, maxAttempts)
+		INSERT INTO jobs (job_type, payload, max_attempts, status, next_attempt_at)
+		VALUES ($1, $2, $3,
+			CASE WHEN $4::timestamptz IS NULL THEN 'queued' ELSE 'scheduled' END::job_status,
+			$4)
+		RETURNING `+jobColumns,
+		jobType, payload, maxAttempts, runAt)
 	return scanJob(row)
 }
 
@@ -187,6 +192,39 @@ func (s *Store) RequeueJob(ctx context.Context, id uuid.UUID) (*jobs.Job, error)
 		RETURNING `+jobColumns,
 		id)
 	return scanJob(row)
+}
+
+// PromoteDueScheduled moves scheduled jobs whose start time has arrived into
+// 'queued' and returns them so the caller can publish them.
+func (s *Store) PromoteDueScheduled(ctx context.Context, limit int) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE jobs SET
+			status = 'queued',
+			next_attempt_at = NULL,
+			updated_at = now()
+		WHERE id IN (
+			SELECT id FROM jobs
+			WHERE status = 'scheduled'
+			  AND next_attempt_at <= now()
+			ORDER BY next_attempt_at
+			LIMIT $1
+		)
+		RETURNING id`,
+		limit)
+	if err != nil {
+		return nil, fmt.Errorf("promote due scheduled: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan promoted scheduled: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // FindStaleQueued returns IDs of jobs that have sat in 'queued' longer than olderThan

@@ -1,7 +1,6 @@
 # TODO
 
 ## Stretch
-- 'scheduled' status: delayed/scheduled job start
 - Priority queues
 - Runs table: one row per attempt (worker, timings, error) + retention policy
 - 'cancelled' status: cancel a queued or running job via API

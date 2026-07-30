@@ -10,6 +10,7 @@ import (
 type Status string
 
 const (
+	StatusScheduled Status = "scheduled"
 	StatusQueued    Status = "queued"
 	StatusRunning   Status = "running"
 	StatusCompleted Status = "completed"
@@ -29,4 +30,6 @@ type Job struct {
 	UpdatedAt   time.Time       `json:"updated_at"`
 	StartedAt   *time.Time      `json:"started_at,omitempty"`
 	FinishedAt  *time.Time      `json:"finished_at,omitempty"`
+
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }

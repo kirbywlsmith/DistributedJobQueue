@@ -33,6 +33,10 @@ data:
   003_add_next_attempt_at.sql: |
     ALTER TABLE jobs
         ADD COLUMN next_attempt_at TIMESTAMPTZ;
+  004_add_scheduled_status.sql: |
+    ALTER TYPE job_status ADD VALUE 'scheduled';
+  005_add_scheduled_index.sql: |
+    CREATE INDEX idx_jobs_scheduled ON jobs (next_attempt_at) WHERE status = 'scheduled';
 ---
 apiVersion: apps/v1
 kind: Deployment

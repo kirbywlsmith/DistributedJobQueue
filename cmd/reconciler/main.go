@@ -48,6 +48,15 @@ func main() {
 		log.Info("rescued abandoned jobs", "count", len(rescued))
 	}
 
+	promoted, err := store.PromoteDueScheduled(ctx, limit)
+	if err != nil {
+		log.Error("promote due scheduled", "err", err)
+		os.Exit(1)
+	}
+	if len(promoted) > 0 {
+		log.Info("promoted scheduled jobs", "count", len(promoted))
+	}
+
 	stale, err := store.FindStaleQueued(ctx, staleQueued, limit)
 	if err != nil {
 		log.Error("find stale queued", "err", err)
@@ -55,7 +64,7 @@ func main() {
 	}
 
 	republished, failed := 0, 0
-	for _, id := range dedupe(rescued, stale) {
+	for _, id := range dedupe(rescued, promoted, stale) {
 		if err := pub.PublishJobID(ctx, id.String()); err != nil {
 			log.Error("republish", "job_id", id, "err", err)
 			failed++
@@ -66,6 +75,7 @@ func main() {
 
 	log.Info("reconcile complete",
 		"rescued", len(rescued),
+		"promoted", len(promoted),
 		"stale_queued", len(stale),
 		"republished", republished,
 		"failed", failed)
