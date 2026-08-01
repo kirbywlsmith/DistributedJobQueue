@@ -63,3 +63,24 @@ Grafana is at `localhost:3000`, login `admin` / `prom-operator`:
 kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80
 ```
 
+## API
+
+| Route | Purpose |
+|---|---|
+| `POST /jobs` | Create a job |
+| `GET /jobs/{id}` | Current state |
+| `GET /jobs/{id}/runs` | Per-attempt history |
+| `POST /jobs/{id}/requeue` | Give a failed job a fresh attempt budget |
+
+```json
+POST /jobs
+{
+  "type": "sleep",
+  "payload": { "seconds": 5 },         // depends on type
+  "max_attempts": 3,                   // optional, default 5
+  "priority": 5,                       // optional, 0-5, jumps the queue
+  "run_at": "2026-08-01T09:00:00Z"     // optional, schedule for later
+}
+```
+
+Available demo job types: `sleep`, `cpu`, `flaky`. Job type handlers in `internal/handlers`.
