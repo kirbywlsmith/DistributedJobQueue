@@ -20,3 +20,46 @@ Clients submit jobs and check their progress via a web API (Go). The web API sav
 
 A job moves through `scheduled > queued > running > completed | failed`, with failed attempts looping back to `queued` until the attempt budget runs out.
 
+## Running locally
+
+Requires Docker, k3d, kubectl and helm.
+
+```bash
+k3d cluster create jobqueue --agents 2
+
+helm repo add kedacore https://kedacore.github.io/charts
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+helm install keda kedacore/keda -n keda --create-namespace --wait
+
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  -n monitoring --create-namespace --wait \
+  --set alertmanager.enabled=false \
+  --set prometheus.prometheusSpec.retention=6h \
+  --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
+
+docker build -t distributedjobqueue-api -f cmd/api/Dockerfile .
+docker build -t distributedjobqueue-worker -f cmd/worker/Dockerfile .
+docker build -t distributedjobqueue-reconciler -f cmd/reconciler/Dockerfile .
+k3d image import distributedjobqueue-api distributedjobqueue-worker distributedjobqueue-reconciler -c jobqueue
+
+kubectl apply -f k8s/
+kubectl wait --for=condition=available --timeout=180s deployment/api
+
+kubectl port-forward svc/api 8080:8080
+```
+
+Submit a burst and watch KEDA scale (`kubectl get pods -w`):
+
+```powershell
+./scripts/submit-jobs.ps1
+```
+
+Grafana is at `localhost:3000`, login `admin` / `prom-operator`:
+
+```bash
+kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80
+```
+
