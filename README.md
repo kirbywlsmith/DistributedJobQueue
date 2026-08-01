@@ -23,7 +23,7 @@ A job moves through `scheduled > queued > running > completed | failed`, with fa
 Requires Docker, k3d, kubectl and helm.
 
 ```bash
-k3d cluster create jobqueue --agents 2
+k3d cluster create jobqueue --agents 2 --api-port 127.0.0.1:6550
 
 helm repo add kedacore https://kedacore.github.io/charts
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
