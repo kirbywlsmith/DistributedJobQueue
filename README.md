@@ -84,3 +84,16 @@ POST /jobs
 ```
 
 Available demo job types: `sleep`, `cpu`, `flaky`. Job type handlers in `internal/handlers`.
+
+## Behaviour notes
+
+- At-least-once delivery, with idempotent claims
+- Workers take a 60s lease when claiming a job and refresh every 20s while running it
+- Reconciler cron job running every minute
+  - Ensures the message queue and database states align
+  - Restores jobs with expired leases so a functional worker can pick them up
+  - Publishes scheduled jobs once their time arrives
+- Retries with exponential backoff
+  - Failed jobs go through TTL + dead letter holding queues (5s > 30s > 2m > 10m > 30m)
+- Available workers are scaled to zero when the queue is empty - scaled back up when a message appears
+- Per-attempt history / information is persisted in a job_runs table
