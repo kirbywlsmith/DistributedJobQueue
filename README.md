@@ -1,4 +1,4 @@
-# Summary
+## Summary
 
 A job processing system, built with an aim to learn more about distributed systems and their underlying technologies (using Go, Postgres, RabbitMQ, Kubernetes, KEDA, Prometheus, Grafana).
 
